@@ -1,4 +1,6 @@
 using Godot;
+using Godot.Collections;
+using System;
 
 namespace GodotYaml;
 
@@ -35,18 +37,42 @@ public static class Yaml
     public static YamlResult Parse(string input, bool detectStyle = false) =>
         Result(Call("parse", input, detectStyle));
 
+    /// Parses YAML whose root value must be a mapping with string keys.
+    public static Dictionary<string, Variant> ParseDictionary(string input, bool detectStyle = false) =>
+        RequireDictionary(Parse(input, detectStyle));
+
+    /// Parses YAML into a string-keyed dictionary without throwing for YAML errors.
+    public static bool TryParseDictionary(
+        string input,
+        out Dictionary<string, Variant> dictionary,
+        bool detectStyle = false)
+    {
+        var result = TryParse(input);
+        return TryGetDictionary(result, out dictionary);
+    }
+
     public static YamlResult ParseAndValidate(string input, Variant schema = default, bool detectStyle = false) =>
         Result(Call("parse_and_validate", input, schema, detectStyle));
 
     public static YamlResult Stringify(Variant value) => Result(Call("stringify", value));
 
+    /// Serializes a string-keyed Godot dictionary.
+    public static YamlResult Stringify(Dictionary<string, Variant> value) =>
+        Stringify(new Variant(value));
+
     public static YamlResult LoadFile(string path, bool detectStyle = false) =>
         Result(Call("load_file", path, detectStyle));
+
+    public static Dictionary<string, Variant> LoadDictionary(string path, bool detectStyle = false) =>
+        RequireDictionary(LoadFile(path, detectStyle));
 
     public static YamlResult LoadFileAndValidate(string path, Variant schema = default, bool detectStyle = false) =>
         Result(Call("load_file_and_validate", path, schema, detectStyle));
 
     public static YamlResult SaveFile(Variant value, string path) => Result(Call("save_file", value, path));
+
+    public static YamlResult SaveFile(Dictionary<string, Variant> value, string path) =>
+        SaveFile(new Variant(value), path);
 
     public static YamlResult ValidateSyntax(string input) => Result(Call("validate_syntax", input));
 
@@ -59,12 +85,25 @@ public static class Yaml
 
     public static string TryStringify(Variant value) => Call("try_stringify", value).AsString();
 
+    public static string TryStringify(Dictionary<string, Variant> value) =>
+        TryStringify(new Variant(value));
+
     public static Variant TryLoadFile(string path) => Call("try_load_file", path);
 
     public static Variant TryLoadFileAndValidate(string path, Variant schema = default) =>
         Call("try_load_file_and_validate", path, schema);
 
     public static bool TrySaveFile(Variant value, string path) => Call("try_save_file", value, path).AsBool();
+
+    public static bool TrySaveFile(Dictionary<string, Variant> value, string path) =>
+        TrySaveFile(new Variant(value), path);
+
+    public static bool TryLoadDictionary(
+        string path,
+        out Dictionary<string, Variant> dictionary)
+    {
+        return TryGetDictionary(TryLoadFile(path), out dictionary);
+    }
 
     public static GodotObject CreateStyle() => Object(Call("create_style"));
 
@@ -78,9 +117,49 @@ public static class Yaml
 
     private static YamlResult Result(Variant value) => new(Object(value));
 
+    private static Dictionary<string, Variant> RequireDictionary(YamlResult result)
+    {
+        if (result.HasError)
+            throw new YamlException(result.Error);
+
+        if (!TryGetDictionary(result.Data, out var dictionary))
+            throw new YamlException("The YAML root value is not a mapping with string keys.");
+
+        return dictionary;
+    }
+
+    private static bool TryGetDictionary(
+        Variant value,
+        out Dictionary<string, Variant> dictionary)
+    {
+        dictionary = new Dictionary<string, Variant>();
+        if (value.VariantType != Variant.Type.Dictionary)
+            return false;
+
+        var source = value.AsGodotDictionary();
+        foreach (Variant key in source.Keys)
+        {
+            if (key.VariantType != Variant.Type.String)
+            {
+                dictionary.Clear();
+                return false;
+            }
+
+            dictionary[key.AsString()] = source[key];
+        }
+
+        return true;
+    }
+
     private static GodotObject Object(Variant value) =>
         value.AsGodotObject()
         ?? throw new InvalidOperationException("The YAML extension returned null.");
+}
+
+/// Exception thrown when a typed YAML helper cannot return the requested shape.
+public sealed class YamlException : Exception
+{
+    public YamlException(string message) : base(message) { }
 }
 
 /// Managed view over the native YAMLResult object.
